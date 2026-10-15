@@ -1,9 +1,11 @@
 -- 발전기: ProximityPrompt 로 퍼즐을 열고, 퍼즐 단계를 완료할 때마다 진행도가 오릅니다.
+-- 퍼즐이 열려 있는 동안 생존자는 Repairing 상태(이동 불가). 봇은 BotWork 로 시간을 채워 수리합니다.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Remotes = require(Shared.Remotes)
+local Util = require(Shared.Util)
 local State = require(script.Parent.State)
 local Status = require(script.Parent.Status)
 local Net = require(script.Parent.Net)
@@ -14,9 +16,22 @@ GeneratorService.OnCompleted = nil :: ((any) -> ())?
 local RED = Color3.fromRGB(255, 60, 60)
 local GREEN = Color3.fromRGB(80, 255, 120)
 
-local folder: Folder
-local spots: { Vector3 } = {}
+-- 퍼즐이 열려 있는 동안 유지되는 Repairing 상태 시간 (StopWork 에서 해제)
+local REPAIRING_DURATION = 3600
+
+local folder: Folder? = nil
 local gens = {}
+
+local function getFolder(): Folder
+	if not folder or not folder.Parent then
+		local f = Instance.new("Folder")
+		f.Name = "Generators"
+		f.Parent = workspace
+		folder = f
+		return f
+	end
+	return folder
+end
 
 local function part(parent: Instance, name: string, size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material?): Part
 	local p = Instance.new("Part")
@@ -38,6 +53,14 @@ local function updateVisual(gen)
 	local color = RED:Lerp(GREEN, ratio)
 	gen.Light.Color = color
 	gen.PointLight.Color = color
+end
+
+local function inRange(data, gen): boolean
+	return (data.Root.Position - gen.Position).Magnitude <= Config.GENERATOR_REPAIR_RANGE
+end
+
+local function canWork(data): boolean
+	return data ~= nil and data.Role == "Survivor" and State.IsAlive(data) and not Status.Has(data, "Stunned")
 end
 
 local function build(id: number, position: Vector3)
@@ -81,7 +104,8 @@ local function build(id: number, position: Vector3)
 	bb.Parent = body
 
 	model.PrimaryPart = body
-	model.Parent = folder
+	model:SetAttribute("GeneratorId", id)
+	model.Parent = getFolder()
 
 	local gen = {
 		Id = id,
@@ -97,95 +121,106 @@ local function build(id: number, position: Vector3)
 	updateVisual(gen)
 
 	prompt.Triggered:Connect(function(player)
-		local data = State.Get(player)
-		if not data or data.Role ~= "Survivor" or not State.IsAlive(data) then
-			return
-		end
-		if gen.Completed or Status.Has(data, "Stunned") then
-			return
-		end
-		data.RepairingGen = id
-		Net.Send(player, "OpenGenerator", id, model, gen.Progress, Config.GENERATOR_STEPS)
+		GeneratorService.StartWork(State.Get(player), id)
 	end)
 
 	return gen
+end
+
+-- 이 발전기를 작업 중인 엔트리 목록
+local function workers(genId: number)
+	local list = {}
+	for _, data in pairs(State.All()) do
+		if data.RepairingGen == genId then
+			table.insert(list, data)
+		end
+	end
+	return list
 end
 
 local function complete(gen)
 	gen.Completed = true
 	gen.Prompt.Enabled = false
 	updateVisual(gen)
-	for _, data in pairs(State.All()) do
-		if data.RepairingGen == gen.Id then
-			data.RepairingGen = nil
-			Net.Send(data.Owner, "CloseGenerator")
-		end
+	for _, data in ipairs(workers(gen.Id)) do
+		GeneratorService.StopWork(data)
 	end
+	State.Broadcast("OnAnyGeneratorCompleted", gen)
 	if GeneratorService.OnCompleted then
-		GeneratorService.OnCompleted(gen)
+		local ok, err = pcall(GeneratorService.OnCompleted, gen)
+		if not ok then
+			warn("발전기 완료 처리 오류:", err)
+		end
 	end
 end
 
+-- 퍼즐 한 단계 완료 처리 (플레이어/봇 공통)
+local function step(data, gen)
+	gen.Progress += 1
+	data.Stats.Generators += 1
+	updateVisual(gen)
+	State.CallHook(data, "OnGeneratorStep", gen)
+	if Config.GENERATOR_NOTIFY_KILLER then
+		Net.Killer("GenPing", gen.Position)
+	end
+	if gen.Progress >= Config.GENERATOR_STEPS then
+		complete(gen)
+		return
+	end
+	for _, other in ipairs(workers(gen.Id)) do
+		Net.Send(other.Owner, "GeneratorProgress", gen.Id, gen.Progress, Config.GENERATOR_STEPS)
+	end
+end
+
+-- 숫자 퍼즐 단계 완료 요청 (클라이언트 → 서버)
 local function onStep(player: Player, id)
+	if typeof(id) ~= "number" then
+		return
+	end
 	local data = State.Get(player)
-	if not data or data.Role ~= "Survivor" or not State.IsAlive(data) then
+	if not canWork(data) or data.RepairingGen ~= id then
 		return
 	end
 	local gen = gens[id]
-	if not gen or gen.Completed or data.RepairingGen ~= id then
-		return
-	end
-	if (data.Root.Position - gen.Position).Magnitude > Config.GENERATOR_REPAIR_RANGE then
+	if not gen or gen.Completed or not inRange(data, gen) then
 		return
 	end
 	local t = os.clock()
-	if data.LastGenStep and t - data.LastGenStep < Config.GENERATOR_STEP_COOLDOWN then
+	local last = data.Vars._genLastStep
+	if last and t - last < Config.GENERATOR_MIN_SOLVE_TIME then
 		return
 	end
-	data.LastGenStep = t
-
-	gen.Progress += 1
-	updateVisual(gen)
-	if gen.Progress >= Config.GENERATOR_STEPS then
-		complete(gen)
-	else
-		for _, other in pairs(State.All()) do
-			if other.RepairingGen == id then
-				Net.Send(other.Owner, "GeneratorProgress", id, gen.Progress, Config.GENERATOR_STEPS)
-			end
-		end
-	end
+	data.Vars._genLastStep = t
+	step(data, gen)
 end
 
-function GeneratorService.Init(map)
-	spots = map.GeneratorSpots
-	folder = Instance.new("Folder")
-	folder.Name = "Generators"
-	folder.Parent = workspace
-
+function GeneratorService.Init()
+	getFolder()
 	Remotes.GeneratorStep.OnServerEvent:Connect(onStep)
 	Remotes.GeneratorCancel.OnServerEvent:Connect(function(player)
 		local data = State.Get(player)
 		if data then
-			data.RepairingGen = nil
+			GeneratorService.StopWork(data)
 		end
 	end)
 end
 
 function GeneratorService.Clear()
-	folder:ClearAllChildren()
+	for _, data in pairs(State.All()) do
+		if data.RepairingGen then
+			GeneratorService.StopWork(data)
+		end
+	end
+	getFolder():ClearAllChildren()
 	table.clear(gens)
 end
 
-function GeneratorService.Reset(count: number)
+-- 맵의 GeneratorSpots 중 무작위 count 곳에 발전기 생성
+function GeneratorService.Reset(map, count: number)
 	GeneratorService.Clear()
-	local shuffled = table.clone(spots)
-	for i = #shuffled, 2, -1 do
-		local j = math.random(1, i)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	end
-	for i = 1, math.min(count, #shuffled) do
-		gens[i] = build(i, shuffled[i])
+	local spots = Util.Shuffle(table.clone(map.GeneratorSpots or {}))
+	for i = 1, math.min(count, #spots) do
+		gens[i] = build(i, spots[i])
 	end
 end
 
@@ -200,11 +235,82 @@ function GeneratorService.Remaining(): number
 end
 
 function GeneratorService.Total(): number
-	local n = 0
-	for _ in pairs(gens) do
-		n += 1
+	return #gens
+end
+
+function GeneratorService.GetAll()
+	return table.clone(gens)
+end
+
+-- 가장 가까운 미완료 발전기와 거리
+function GeneratorService.NearestIncomplete(position: Vector3)
+	local best, bestDist = nil, math.huge
+	for _, gen in ipairs(gens) do
+		if not gen.Completed then
+			local dist = (gen.Position - position).Magnitude
+			if dist < bestDist then
+				best, bestDist = gen, dist
+			end
+		end
 	end
-	return n
+	return best, bestDist
+end
+
+-- 수리 시작. 플레이어는 퍼즐 창을 열고 Repairing 상태가 됨, 봇은 작업 표시만
+function GeneratorService.StartWork(data, genId: number): boolean
+	if not canWork(data) then
+		return false
+	end
+	local gen = gens[genId]
+	if not gen or gen.Completed or not inRange(data, gen) then
+		return false
+	end
+	if data.RepairingGen and data.RepairingGen ~= genId then
+		GeneratorService.StopWork(data)
+	end
+	data.RepairingGen = genId
+	if data.IsBot then
+		return true
+	end
+	data.Vars._genLastStep = os.clock()
+	Status.Add(data, "Repairing", REPAIRING_DURATION)
+	Net.Send(data.Owner, "OpenGenerator", genId, gen.Model, gen.Progress, Config.GENERATOR_STEPS)
+	return true
+end
+
+-- 수리 중단 (퍼즐 창 닫기 + Repairing 해제)
+function GeneratorService.StopWork(data)
+	if not data then
+		return
+	end
+	local wasWorking = data.RepairingGen ~= nil
+	data.RepairingGen = nil
+	data.Vars._genWork = nil
+	if data.Statuses.Repairing then
+		Status.Remove(data, "Repairing")
+	end
+	if wasWorking and not data.IsBot then
+		Net.Send(data.Owner, "CloseGenerator")
+	end
+end
+
+-- 봇 수리 틱: 범위 안이면 시간을 쌓고 BOT_REPAIR_STEP_TIME 마다 한 단계 완료
+function GeneratorService.BotWork(data, gen, dt: number): boolean
+	if not gen or gen.Completed or gens[gen.Id] ~= gen or not canWork(data) or not inRange(data, gen) then
+		return false
+	end
+	if data.RepairingGen ~= gen.Id and not GeneratorService.StartWork(data, gen.Id) then
+		return false
+	end
+	local work = (data.Vars._genWork or 0) + dt
+	if work >= Config.BOT_REPAIR_STEP_TIME then
+		work -= Config.BOT_REPAIR_STEP_TIME
+		data.Vars._genWork = work
+		step(data, gen)
+	else
+		data.Vars._genWork = work
+	end
+	return true
 end
 
 return GeneratorService
