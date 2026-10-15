@@ -107,3 +107,27 @@ src/
 - **밸런스**: `Config.luau` 에서 라운드 시간, 발전기 수/단계, 스태미나 수치 등을 조정합니다.
 - **음악/효과음**: 추격 음악·최후의 생존자 음악은 `client/Effects.luau` 의 `LastManStanding` 등에 `Sound` 를 추가해 넣을 수 있습니다 (본인 소유 또는 사용 가능한 오디오 ID 필요).
 - **데이터 저장**: 현재 Malice / Wins 는 세션 내에서만 유지됩니다. 영구 저장이 필요하면 `LobbyService` 에 DataStoreService 를 연결하세요.
+
+## 저장소 메모 (main 브랜치에서 병합)
+
+```
+PICKON/
+├── .claude-plugin/
+│   └── marketplace.json
+└── plugins/
+    └── 플러그인이름/
+        ├── .claude-plugin/
+        │   └── plugin.json
+        └── skills/ ...
+{
+  "name": "pickon",
+  "owner": { "name": "PICKON39" },
+  "plugins": [
+    {
+      "name": "플러그인이름",
+      "source": "./plugins/플러그인이름",
+      "description": "플러그인 설명"
+    }
+  ]
+}
+```
