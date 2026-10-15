@@ -31,7 +31,7 @@
     "Players": {
       "$properties": {
         "CharacterAutoLoads": true,
-        "RespawnTime": 3
+        "RespawnTime": 5
       }
     }
   }
