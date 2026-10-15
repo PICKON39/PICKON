@@ -1,4 +1,9 @@
 -- 라운드 시작 시 캐릭터 모델에 역할별 외형/스탯 적용
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+
 local CharacterSetup = {}
 
 local KILLER_HEALTH = 100000
@@ -39,8 +44,8 @@ local function applyKillerLook(model: Model, def)
 		end
 	end
 
-	local head = model:FindFirstChild("Head") :: BasePart?
-	if head then
+	local head = model:FindFirstChild("Head")
+	if head and head:IsA("BasePart") then
 		local face = head:FindFirstChild("face")
 		if face then
 			face:Destroy()
@@ -50,8 +55,8 @@ local function applyKillerLook(model: Model, def)
 		end
 	end
 
-	local hand = (model:FindFirstChild("RightHand") or model:FindFirstChild("Right Arm")) :: BasePart?
-	if hand then
+	local hand = model:FindFirstChild("RightHand") or model:FindFirstChild("Right Arm")
+	if hand and hand:IsA("BasePart") then
 		local blade = decorPart(
 			model,
 			Vector3.new(0.25, 0.6, 4),
@@ -79,12 +84,19 @@ function CharacterSetup.Apply(model: Model, role: string, def)
 	hum.UseJumpPower = true
 	hum.JumpPower = 0
 	hum.WalkSpeed = def.WalkSpeed
+	-- 죽으면 관절을 끊지 않고 Ragdoll 로 처리
+	hum.BreakJointsOnDeath = false
+
+	model:SetAttribute("Role", role)
+	model:SetAttribute("CharacterId", def.Id)
+	CollectionService:AddTag(model, role == "Killer" and "Killer" or "Survivor")
 
 	if role == "Killer" then
 		hum.MaxHealth = KILLER_HEALTH
 		hum.Health = KILLER_HEALTH
 		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 		hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+		model:SetAttribute("TerrorRadius", def.TerrorRadius or Config.TERROR_RADIUS)
 		applyKillerLook(model, def)
 	else
 		hum.MaxHealth = def.MaxHealth
