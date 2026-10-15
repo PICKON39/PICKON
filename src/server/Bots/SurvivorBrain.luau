@@ -120,11 +120,10 @@ function SurvivorBrain.Run(data, session, map)
 			end
 			nav:Stop()
 			Nav.Face(data, gen.Position)
-			if data.RepairingGen ~= gen.Id then
-				stopRepair()
-				GeneratorService.StartWork(data, gen.Id)
+			-- BotWork 가 필요하면 StartWork 도 처리 (범위 밖이면 false)
+			if not GeneratorService.BotWork(data, gen, dt) then
+				nav:MoveTo(gen.Position)
 			end
-			GeneratorService.BotWork(data, gen, dt)
 			return
 		end
 
