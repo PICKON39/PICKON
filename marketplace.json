@@ -1,17 +1,15 @@
-{.claude-plugin/
+{
   "name": "pickon",
   "owner": {
     "name": "PICKON39"
   },
   "plugins": [
     {
-      "name": "remove-ai-marks",
-      "source": "./plugins/remove-ai-marks",
-      "description": "AI 표식 제거 스킬"
-    },
-    {
       "name": "ponytail",
-      "source": "./plugins/ponytail",
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      },
       "description": "포니테일 플러그인"
     }
   ]
