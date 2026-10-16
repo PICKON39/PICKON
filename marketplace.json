@@ -1,0 +1,13 @@
+{
+  "name": "pickon",
+  "owner": {
+    "name": "PICKON39"
+  },
+  "plugins": [
+    {
+      "name": "remove-ai-marks",
+      "source": "./plugins/remove-ai-marks",
+      "description": "AI 표식 제거 스킬"
+    }
+  ]
+}
