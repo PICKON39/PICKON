@@ -8,6 +8,11 @@
       "name": "remove-ai-marks",
       "source": "./plugins/remove-ai-marks",
       "description": "AI 표식 제거 스킬"
+    },
+    {
+      "name": "ponytail",
+      "source": "./plugins/ponytail",
+      "description": "포니테일 플러그인"
     }
   ]
 }
